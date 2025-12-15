@@ -4,12 +4,15 @@ const mongoose = require('mongoose')
 const supertest = require('supertest')
 const app = require('../app')
 const Blog = require('../models/blog')
+const User = require('../models/user')
 const helper = require('./test_helper')
+const jwt = require('jsonwebtoken')
+const bcrypt = require('bcrypt')
 require('dotenv').config()
 
 const api = supertest(app)
 
-
+let token = null
 
 before(async () => {
   const uri = process.env.TEST_MONGODB_URI || 'mongodb://127.0.0.1/bloglist-test'
@@ -19,6 +22,19 @@ before(async () => {
 beforeEach(async () => {
   await Blog.deleteMany({})
   await Blog.insertMany(helper.initialBlogs)
+  await User.deleteMany({})
+
+  const passwordHash = await bcrypt.hash('secret', 10)
+  const user = new User({ username: 'root', passwordHash })
+  await user.save()
+
+  const userForToken = {
+    username: user.username,
+    id: user._id,
+  }
+
+  // Provide a valid secret for testing even if env is missing
+  token = jwt.sign(userForToken, process.env.SECRET || 'secret')
 })
 
 after(async () => {
@@ -53,6 +69,7 @@ describe('blog api', () => {
 
     await api
       .post('/api/blogs')
+      .set('Authorization', `Bearer ${token}`)
       .send(newBlog)
       .expect(201)
       .expect('Content-Type', /application\/json/)
@@ -73,6 +90,7 @@ describe('blog api', () => {
 
     const response = await api
       .post('/api/blogs')
+      .set('Authorization', `Bearer ${token}`)
       .send(newBlog)
       .expect(201)
       .expect('Content-Type', /application\/json/)
@@ -86,7 +104,11 @@ describe('blog api', () => {
       url: 'https://missingtitle.example.com',
     }
 
-    await api.post('/api/blogs').send(newBlog).expect(400)
+    await api
+      .post('/api/blogs')
+      .set('Authorization', `Bearer ${token}`)
+      .send(newBlog)
+      .expect(400)
 
     const blogsAtEnd = await helper.blogsInDb()
     assert.strictEqual(blogsAtEnd.length, helper.initialBlogs.length)
@@ -98,10 +120,27 @@ describe('blog api', () => {
       author: 'Missing URL Author',
     }
 
-    await api.post('/api/blogs').send(newBlog).expect(400)
+    await api
+      .post('/api/blogs')
+      .set('Authorization', `Bearer ${token}`)
+      .send(newBlog)
+      .expect(400)
 
     const blogsAtEnd = await helper.blogsInDb()
     assert.strictEqual(blogsAtEnd.length, helper.initialBlogs.length)
+  })
+
+  test('fails with status 401 if token is missing', async () => {
+    const newBlog = {
+      title: 'No Token Blog',
+      author: 'Hacker',
+      url: 'https://hacker.com'
+    }
+
+    await api
+      .post('/api/blogs')
+      .send(newBlog)
+      .expect(401)
   })
 
   test('deletes a blog', async () => {
